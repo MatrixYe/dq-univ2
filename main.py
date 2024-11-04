@@ -49,7 +49,7 @@ class Task:
 
     def __init__(self, **kwargs):
         #     conf = {
-        #         'network': network,
+        #         'chain': chain,
         #         'endpoint_url': endpoint_url,
         #         'factory': factory,
         #         'full_pair': full_pair,
@@ -59,7 +59,7 @@ class Task:
         #         'mongo': mongo,
         #         'redis': redis,
         #     }
-        self.network = kwargs.get('network')
+        self.chain = kwargs.get('chain')
         self.endpoint_url = kwargs.get('endpoint_url')
         self.factory = kwargs.get('factory')
         self.full_pair = kwargs.get('full_pair')
@@ -121,7 +121,7 @@ class Task:
 
     def _connect_mongo_database(self):
         lg.info(f"_connect_mongo ... ...")
-        dbname = f"univ2_{self.network}"
+        dbname = f"univ2_{self.chain}"
         lg.info(f"chose database: {dbname}")
         try:
             uri = self.mongo_uri
@@ -724,8 +724,8 @@ class Task:
         lg.info(f"Sync All Pairs Complete!")
 
     def watchdog(self):
-        if not self.network:
-            raise Exception(f"failed args 'network':{self.network}")
+        if not self.chain:
+            raise Exception(f"failed args 'chain':{self.chain}")
         if not self.endpoint_url:
             raise Exception(f"failed args 'endpoint_url':{self.endpoint_url}")
         if not self.factory:
@@ -738,7 +738,7 @@ class Task:
             raise Exception(f"failed args 'mongo_uri':{self.mongo_uri}")
         if not self.redis_uri:
             raise Exception(f"failed args 'redis_uri':{self.redis_uri}")
-        lg.info(f"startup: {self.network=}")
+        lg.info(f"startup: {self.chain=}")
         lg.info(f"startup: {self.endpoint_url=}")
         lg.info(f"startup: {self.factory=}")
         lg.info(f"startup: {self.full_pair=}")
@@ -757,7 +757,7 @@ class Task:
 
 
 @click.command()
-@click.option('--network', type=str, required=True, help='The evm network,eg:ethereum')
+@click.option('--chain', type=str, required=True, help='The evm chain,eg:ethereum')
 @click.option('--endpoint_url', type=str, required=True, help='The endpoint URL')
 @click.option('--factory', type=str, required=True, help='The endpoint URL')
 @click.option('--full_pair', type=bool, required=True, help='Full pair flag')
@@ -766,8 +766,8 @@ class Task:
 @click.option('--sync_interval', type=int, required=True, help='Sync interval in seconds')
 @click.option('--mongo', type=str, required=True, help='MongoDB connection string')
 @click.option('--redis', type=str, required=True, help='Redis connection string')
-def main(network, endpoint_url, factory, full_pair, skip_history, start_block, sync_interval, mongo, redis):
-    click.echo(f'network: {network}')
+def main(chain, endpoint_url, factory, full_pair, skip_history, start_block, sync_interval, mongo, redis):
+    click.echo(f'chain: {chain}')
     click.echo(f'Endpoint URL: {endpoint_url}')
     click.echo(f'factory: {factory}')
     click.echo(f'Full Pair: {full_pair}')
@@ -778,7 +778,7 @@ def main(network, endpoint_url, factory, full_pair, skip_history, start_block, s
     click.echo(f'Redis: {redis}')
 
     conf = {
-        'network': network,
+        'chain': chain,
         'endpoint_url': endpoint_url,
         'factory': factory,
         'full_pair': full_pair,
