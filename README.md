@@ -15,3 +15,15 @@ python main.py \
   --redis "redis://:nopassword@127.0.0.1:5010/db"
 
 ``` 
+
+```shell
+docker run -itd --name dq-univ2-ethereum --network dq dq-univ2 \
+  --network ethereum \
+  --endpoint_url "https://responsive-weathered-wave.quiknode.pro/bddde541192e648f9cfb99a1ad86d8846058d334/" \
+  --factory "0x5c69bee701ef814a2b6a3edd4b1652cb9cc5aa6f" \
+  --full_pair true \
+  --start_block 21112952 \
+  --sync_interval 10 \
+  --mongo "mongodb://root:nopassword@dq-mongo:27017/" \
+  --redis "redis://:nopassword@dq-redis:6379/db"
+```

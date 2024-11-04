@@ -35,38 +35,53 @@ UNIV2_SWAP = "univ2_swap"
 UNIV2_RAT = "univ2_rat"
 UNIV2_KLINE = "univ2_kline"
 
+
 # ---------常量---------#
 # 区块网络
-NETWORK = "ethereum"
-# uniswap v2 factory 合约地址
-FACTORY_ADDREESS = "0x5c69bee701ef814a2b6a3edd4b1652cb9cc5aa6f"
-# ethereum weth 代币合约地址
-WETH_ADDRESS = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
+# NETWORK = "ethereum"
+# # uniswap v2 factory 合约地址
+# FACTORY_ADDREESS = "0x5c69bee701ef814a2b6a3edd4b1652cb9cc5aa6f"
+# # ethereum weth 代币合约地址
+# WETH_ADDRESS = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
 
 
 class Task:
 
-    def __init__(self, endpoint_url: str, full_pair: bool, skip_history: bool, start_block: int, sync_interval: int,
-                 mongo: str, redis: str):
-        self.endpoint_url = endpoint_url
-        self.full_pair = full_pair
-        self.skip_history = skip_history
-        self.start_block = start_block
-        self.sync_interval = sync_interval
-        self.mongo_uri = mongo
-        self.redis_uri = redis
+    def __init__(self, **kwargs):
+        #     conf = {
+        #         'network': network,
+        #         'endpoint_url': endpoint_url,
+        #         'factory': factory,
+        #         'full_pair': full_pair,
+        #         'skip_history': skip_history,
+        #         'start_block': start_block,
+        #         'sync_interval': sync_interval,
+        #         'mongo': mongo,
+        #         'redis': redis,
+        #     }
+        self.network = kwargs.get('network')
+        self.endpoint_url = kwargs.get('endpoint_url')
+        self.factory = kwargs.get('factory')
+        self.full_pair = kwargs.get('full_pair')
 
+        self.skip_history = kwargs.get('skip_history')
+        self.start_block = kwargs.get('start_block')
+        self.sync_interval = kwargs.get('sync_interval')
+        self.mongo_uri = kwargs.get('mongo')
+        self.redis_uri = kwargs.get('redis')
+
+        # 初始化组件
         self._factory_abi = self._read_factory_abi()
         self._pair_abi = self._read_pair_abi()
         self._erc20_abi = self._read_erc20_abi()
 
-        self.db: MongoClient = self._connect_mongo()
+        self.db = self._connect_mongo_database()
         self.rs: StrictRedis = self._connect_redis()
         self.w3 = self._connect_eth_client()
-        self.factory_instance = self._gen_factory_instance(FACTORY_ADDREESS)
+        self.factory_instance = self._gen_factory_instance(self.factory)
 
     # 初始化操作
-    def _initialize(self):
+    def _init_db(self):
         result = self._get_base()
         if not result:
             data = {
@@ -79,22 +94,18 @@ class Task:
             self.db[BASE].insert_one(data)
         else:
             lg.info(f"base:{result}")
-        # event 索引
-        self.db[UNIV2_EVENT].create_index([('ts', 1)])
-        self.db[UNIV2_EVENT].create_index([('name', 1)])
-        # pair索引
+
         self.db[UNIV2_PAIRS].create_index([('create_time', 1)])
         self.db[UNIV2_PAIRS].create_index([('coin_addr', 1)])
         # swap 集合索引
         self.db[UNIV2_SWAP].create_index([("ts", 1)])
-        self.db[UNIV2_SWAP].create_index([("block_number", 1)])
+        self.db[UNIV2_SWAP].create_index([("token_0", 1)])
+        self.db[UNIV2_SWAP].create_index([("token_1", 1)])
         self.db[UNIV2_SWAP].create_index([("pair", 1), ("ts", 1)])
         self.db[UNIV2_SWAP].create_index([("trader", 1), ("ts", 1)])
-        # 老鼠仓 索引
-        self.db[UNIV2_RAT].create_index([("pair", 1)])
-        self.db[UNIV2_RAT].create_index([("ts", 1)])
-        # K线索引,时间戳和pair联合唯一索引
-        self.db[UNIV2_KLINE].create_index([('start_time', 1), ('pair', 1)], unique=True)
+        # token 集合索引
+        self.db[TOKENS].create_index([('address', 1)])
+        self.db[TOKENS].create_index([('symbol', 1)])
 
     def _connect_redis(self) -> StrictRedis:
         try:
@@ -108,14 +119,16 @@ class Task:
             print(f"An error occurred: {e}")
             exit()
 
-    def _connect_mongo(self) -> MongoClient:
+    def _connect_mongo_database(self):
         lg.info(f"_connect_mongo ... ...")
+        dbname = f"univ2_{self.network}"
+        lg.info(f"chose database: {dbname}")
         try:
             uri = self.mongo_uri
             client = MongoClient(uri)
             client.admin.command('ping')
             lg.info(f"Successfully connected to MongoDB:{uri}")
-            return client
+            return client[dbname]
         except Exception as e:
             lg.error(f"An error occurred: {e}")
             exit()
@@ -199,6 +212,7 @@ class Task:
         self._update_base('sync_block', height)
         lg.info(f"set sync block: {height}")
 
+    # 获取base表
     def _get_base(self):
         return self.db[BASE].find_one({'_id': 1})
 
@@ -239,7 +253,7 @@ class Task:
             tx_hash = log.get("transactionHash").hex()
             contract_addr = log.get('address').lower()
             # 判断是否来自factory的event
-            if contract_addr.lower() == FACTORY_ADDREESS.lower():
+            if contract_addr.lower() == self.factory.lower():
                 tx = self._fetch_tx(tx_hash)
                 if not tx:
                     continue
@@ -296,38 +310,29 @@ class Task:
         except Exception as e:
             lg.error(f"_to_sync_signpair:{e}")
 
-    @staticmethod
-    def _cal_stable_index(t0: str, t1: str) -> int:
-        w = WETH_ADDRESS.lower()
-        if w == t0.lower():
-            return 0
-        if w == t1.lower():
-            return 1
-        return -1
-
     def _to_save_pair(self, pindex: int, pair_addr: str, t0_addr: str, t0_symbol: str, t0_decimal: int,
                       t0_total_supply: int, t1_addr: str, t1_symbol: str, t1_decimal: int, t1_total_supply: int):
         lg.info(f"save pair:{pair_addr.lower()}")
-        stable_index = self._cal_stable_index(t0_addr, t1_addr)
-        if stable_index == -1:
-            lg.warning(f"this is no weth pair: {pair_addr} pass")
-            return
-        data = {
+        new_pair_data = {
             '_id': pair_addr.lower(),
-            'pindex': pindex,
+            'eid': None,
             'pair': pair_addr.lower(),
-            'name': f"{t0_symbol}/{t1_symbol}" if stable_index == 1 else f"{t1_symbol}/{t0_symbol}",
-            'coin_addr': t0_addr.lower() if stable_index == 1 else t1_addr.lower(),
-            'coin_symbol': t0_symbol if stable_index == 1 else t1_symbol,
-            'coin_decimal': t0_decimal if stable_index == 1 else t1_decimal,
-            'coin_total_supply': t0_total_supply if stable_index == 1 else t1_total_supply,
-            'stable_addr': t1_addr.lower() if stable_index == 1 else t0_addr,
-            'stable_symbol': t1_symbol if stable_index == 1 else t0_symbol,
-            'stable_decimal': t1_decimal if stable_index == 1 else t0_decimal,
-            'stable_index': stable_index,
-            'create_time': int(time.time()) - 18000  # todo 记得屏蔽会修改此处
+            'pindex': pindex,
+            'name': f"{t0_symbol}/{t1_symbol}",
+            'token_0': t0_addr,
+            'symbol_0': t0_symbol,
+            'decimal_0': t0_decimal,
+            'supply_0': t0_total_supply,
+            'token_1': t1_addr,
+            'symbol_1': t1_symbol,
+            'decimal_1': t1_decimal,
+            'supply_1': t1_total_supply,
+            'create_time': None,
+            'create_block': None,
+            'create_tx': None,
+            'creator': None
         }
-        self._insert_docm(UNIV2_PAIRS, data)
+        self._insert_docm(UNIV2_PAIRS, new_pair_data)
 
     def _find_and_set(self, coll: str, query: dict, new_data: dict, upsert: bool):
         try:
@@ -483,14 +488,7 @@ class Task:
         event['name'] = event_name
         event['ts'] = ts
         event['entity'] = entity
-        # self._save_event(event)  # 即便插入失败，也更新pair
-        # 同步更新pair信息
-        # 忽略锚定币非weth的交易池
-        if WETH_ADDRESS not in [token0.lower(), token1.lower()]:
-            # 0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2 WETH
-            lg.warning(f"not a Standard Pair:{pair} {token0} {token1}")
-            return
-        # 获取token0的基本信息，非标准币不处理
+
         t0_info = self._fetch_erc20(token0)
         if not t0_info:
             lg.warning(f"can not up new pair,token0 not erc20:{token0}")
@@ -512,22 +510,23 @@ class Task:
         t0_total_supply = t0_info['total_supply']
         t1_total_supply = t1_info['total_supply']
 
-        stable_index = self._cal_stable_index(t0_address, t1_address)
-
+        # stable_index = self._cal_stable_index(t0_address, t1_address)
         new_pair_data = {
             '_id': pair.lower(),
             'eid': event.get('_id'),
             'pair': pair.lower(),
             'pindex': pindex,
-            'name': f"{t0_symbol}/{t1_symbol}" if stable_index == 1 else f"{t1_symbol}/{t0_symbol}",
-            'coin_addr': t0_address if stable_index == 1 else t1_address,
-            'coin_symbol': t0_symbol if stable_index == 1 else t1_symbol,
-            'coin_decimal': t0_decimal if stable_index == 1 else t1_decimal,
-            'coin_total_supply': t0_total_supply if stable_index == 1 else t1_total_supply,
-            'stable_addr': t0_address if stable_index == 0 else t1_address,
-            'stable_symbol': t0_symbol if stable_index == 0 else t1_symbol,
-            'stable_decimal': t0_decimal if stable_index == 0 else t1_decimal,
-            'stable_index': stable_index,
+            'name': f"{t0_symbol}/{t1_symbol}",
+            'token_0': t0_address,
+            'symbol_0': t0_symbol,
+            'decimal_0': t0_decimal,
+            'supply_0': t0_total_supply,
+
+            'token_1': t1_address,
+            'symbol_1': t1_symbol,
+            'decimal_1': t1_decimal,
+            'supply_1': t1_total_supply,
+
             'create_time': ts,
             'create_block': event['block_number'],
             'create_tx': tx['tx_hash'],
@@ -562,67 +561,51 @@ class Task:
 
         event['entity'] = entity
 
-        ok = self._save_event(event)  # 如果插入event失败，不更新swap数据
-        if not ok:
-            return
-            # 插入swap数据
+        # 插入swap数据
         # lg.info(f"log index:{event['log_index']}")
         # lg.info(f"sync:{entity}")
         pair = pair_obj.get('pair')
-        coin_addr = pair_obj.get('coin_addr')
-        coin_symbol = pair_obj.get('coin_symbol')
-        coin_decimal = pair_obj.get('coin_decimal')
+        token_0 = pair_obj.get('token_0')
+        symbol_0 = pair_obj.get('symbol_0')
+        decimal_0 = pair_obj.get('decimal_0')
 
-        stable_addr = pair_obj.get('stable_addr')
-        stable_symbol = pair_obj.get('stable_symbol')
-        stable_decimal = pair_obj.get('stable_decimal')
-        stable_index = pair_obj.get('stable_index')
-        if stable_index is None:
-            lg.error(f"can not find stable index by pari:{pair}")
+        token_1 = pair_obj.get('token_1')
+        syymbol_1 = pair_obj.get('symbol_1')
+        decimal_1 = pair_obj.get('decimal_1')
+
         trader = tx['from']
         tx_hash = tx['tx_hash']
         nonce = tx['nonce']
+
         a0 = amount0out - amount0in  # 得到t0 数量
         a1 = amount1out - amount1in  # 得到t1的数量
 
-        amount = abs(a0) / 10 ** coin_decimal if stable_index == 1 else abs(a1) / 10 ** coin_decimal
-        value = abs(a1) / 10 ** stable_decimal if stable_index == 1 else abs(a0) / 10 ** stable_decimal
-        if amount == 0:
-            lg.warning("_save_event:amount is zero!")
-            return
-        price = value / amount  # 计算成交价格
-
-        is_buy = (stable_index == 0 and a0 < 0 < a1) or (stable_index == 1 and a1 < 0 < a0)  # 是否买入，根据稳定币的获取是否为负数
+        amount_0 = a0 / 10 ** decimal_0
+        amount_1 = a1 / 10 ** decimal_1
 
         new_swap = {
             '_id': event['_id'],
             'eid': event['_id'],
             'pair': pair.lower(),
             'trader': trader.lower(),
-            'is_buy': is_buy,
-            'amount': amount,
-            'value': value,
-            'price': price,
-            'coin_addr': coin_addr,
-            'coin_symbol': coin_symbol,
-            'coin_decimal': coin_decimal,
-            'stable_addr': stable_addr,
-            'stable_symbol': stable_symbol,
-            'stable_decimal': stable_decimal,
+            'token_0': token_0,
+            'symbol_0': symbol_0,
+            'decimal_0': decimal_0,
+            'amount_0': amount_0,
+            'amount_1': amount_1,
+            'token_1': token_1,
+            'syymbol_1': syymbol_1,
+            'decimal_1': decimal_1,
             'ts': ts,
             'block_number': event['block_number'],
             'tx_hash': tx_hash,
             'nonce': nonce
         }
+        price = round(a0 / a1, 8)
+        # 插入最新的swap记录
         self._insert_docm(UNIV2_SWAP, new_swap)
         # 更新pair最新价格
         self._find_and_set(UNIV2_PAIRS, {'_id': pair.lower()}, {'price': price, 'update_time': ts}, upsert=False)
-        # 如果nonce为0，那么还要加入到老鼠仓记录中
-        if nonce == 0 and is_buy:
-            self._insert_docm(UNIV2_RAT, new_swap)
-
-        # 更新kline数据
-        self._parse_kline(new_swap)
 
     # 处理k线数据
     def _parse_kline(self, new_swap: dict):
@@ -667,22 +650,17 @@ class Task:
             'reserve1': str(reserve1),
         }
         event['entity'] = entity
-        ok = self._save_event(event)
-        if not ok:
-            return
-        # lg.info(f"log index:{event['log_index']}")
-        # lg.info(f"sync:{entity}")
 
         # 更新池子储备
-        stable_index = pair_obj.get('stable_index')
         pair = pair_obj.get('pair')
-        coin_decimal = pair_obj.get('coin_decimal')
-        stable_decimal = pair_obj.get('stable_decimal')
-        coin_reserve = reserve0 / 10 ** coin_decimal if stable_index == 1 else reserve1 / 10 ** coin_decimal
-        stable_reserve = reserve1 / 10 ** stable_decimal if stable_index == 1 else reserve0 / 10 ** stable_decimal
+        decimal_0 = pair_obj.get('decimal_0')
+        decimal_1 = pair_obj.get('decimal_1')
+        reserve_0 = reserve0 / 10 ** decimal_0
+        reserve_1 = reserve1 / 10 ** decimal_1
+
         new_reserve = {
-            'coin_reserve': coin_reserve,
-            'stable_reserve': stable_reserve,
+            'reserve_0': reserve_0,
+            'reserve_1': reserve_1,
         }
         self._find_and_set(UNIV2_PAIRS, {'_id': pair}, new_reserve, upsert=False)
 
@@ -721,6 +699,7 @@ class Task:
                 self._set_sync_block(i)
                 time.sleep(0.1)
 
+    # 根据Univ2的特性，可以优先同步全部Pool信息
     def _sync_all_pairs(self, debug: bool):
         lg.info(f"Sync All Pairs:{self.full_pair}")
         while self.full_pair:
@@ -744,9 +723,35 @@ class Task:
                     return
         lg.info(f"Sync All Pairs Complete!")
 
+    def watchdog(self):
+        if not self.network:
+            raise Exception(f"failed args 'network':{self.network}")
+        if not self.endpoint_url:
+            raise Exception(f"failed args 'endpoint_url':{self.endpoint_url}")
+        if not self.factory:
+            raise Exception(f"failed args 'factory':{self.factory}")
+        if self.full_pair is None:
+            raise Exception(f"failed args 'full_pair':{self.full_pair}")
+        if not self.sync_interval or self.sync_interval <= 0:
+            raise Exception(f"failed args 'sync_interval':{self.sync_interval}")
+        if not self.mongo_uri:
+            raise Exception(f"failed args 'mongo_uri':{self.mongo_uri}")
+        if not self.redis_uri:
+            raise Exception(f"failed args 'redis_uri':{self.redis_uri}")
+        lg.info(f"startup: {self.network=}")
+        lg.info(f"startup: {self.endpoint_url=}")
+        lg.info(f"startup: {self.factory=}")
+        lg.info(f"startup: {self.full_pair=}")
+        lg.info(f"startup: {self.skip_history=}")
+        lg.info(f"startup: {self.sync_interval=}")
+        lg.info(f"startup: {self.start_block=}")
+        lg.info(f"startup: {self.mongo_uri=}")
+        lg.info(f"startup: {self.redis_uri=}")
+
     # 核心功能代码入口
     def run(self):
-        self._initialize()
+        self.watchdog()
+        self._init_db()
         self._sync_all_pairs(False)
         self._loop()
 
@@ -772,8 +777,19 @@ def main(network, endpoint_url, factory, full_pair, skip_history, start_block, s
     click.echo(f'MongoDB: {mongo}')
     click.echo(f'Redis: {redis}')
 
-    # task = Task(endpoint_url, full_pair, skip_history, start_block, sync_interval, mongo, redis)
-    # task.run()
+    conf = {
+        'network': network,
+        'endpoint_url': endpoint_url,
+        'factory': factory,
+        'full_pair': full_pair,
+        'skip_history': skip_history,
+        'start_block': start_block,
+        'sync_interval': sync_interval,
+        'mongo': mongo,
+        'redis': redis,
+    }
+    task = Task(**conf)
+    task.run()
 
 
 if __name__ == '__main__':
