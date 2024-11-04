@@ -32,33 +32,14 @@ TOKENS = "tokens"
 UNIV2_PAIRS = "univ2_pairs"
 UNIV2_EVENT = "univ2_event"
 UNIV2_SWAP = "univ2_swap"
-UNIV2_RAT = "univ2_rat"
-UNIV2_KLINE = "univ2_kline"
 
-
-# ---------常量---------#
-# 区块网络
-# NETWORK = "ethereum"
-# # uniswap v2 factory 合约地址
-# FACTORY_ADDREESS = "0x5c69bee701ef814a2b6a3edd4b1652cb9cc5aa6f"
-# # ethereum weth 代币合约地址
-# WETH_ADDRESS = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
+UNIV2_KLINE = "univ2_kline"  # 保留，但不使用
 
 
 class Task:
 
     def __init__(self, **kwargs):
-        #     conf = {
-        #         'chain': chain,
-        #         'endpoint_url': endpoint_url,
-        #         'factory': factory,
-        #         'full_pair': full_pair,
-        #         'skip_history': skip_history,
-        #         'start_block': start_block,
-        #         'sync_interval': sync_interval,
-        #         'mongo': mongo,
-        #         'redis': redis,
-        #     }
+
         self.chain = kwargs.get('chain')
         self.endpoint_url = kwargs.get('endpoint_url')
         self.factory = kwargs.get('factory')
@@ -82,18 +63,6 @@ class Task:
 
     # 初始化操作
     def _init_db(self):
-        result = self._get_base()
-        if not result:
-            data = {
-                '_id': 1,
-                'pair_index': -1,  # 没有同步时，新开始的索引为0=-1 +1
-                'start_block': self.start_block,
-                'sync_block': self.start_block,
-                'parse_block': self.start_block
-            }
-            self.db[BASE].insert_one(data)
-        else:
-            lg.info(f"base:{result}")
 
         self.db[UNIV2_PAIRS].create_index([('create_time', 1)])
         self.db[UNIV2_PAIRS].create_index([('coin_addr', 1)])
@@ -106,6 +75,19 @@ class Task:
         # token 集合索引
         self.db[TOKENS].create_index([('address', 1)])
         self.db[TOKENS].create_index([('symbol', 1)])
+        # 初始化状态
+        result = self._get_base()
+        if not result:
+            data = {
+                '_id': 1,
+                'pair_index': -1,  # 没有同步时，新开始的索引为0=-1 +1
+                'start_block': self.start_block,
+                'sync_block': self.start_block,
+                'parse_block': self.start_block
+            }
+            self.db[BASE].insert_one(data)
+        else:
+            lg.info(f"base:{result}")
 
     def _connect_redis(self) -> StrictRedis:
         try:
@@ -163,9 +145,11 @@ class Task:
         lg.info(f"_set_local_pair_index:{index}")
         self._update_base("pair_index", index)
 
+    # 获取pair信息
     def _get_pair(self, addr: str):
         return self.db[UNIV2_PAIRS].find_one({'_id': addr.lower()})
 
+    # 获取交易Tx
     def _fetch_tx(self, tx_hash) -> dict | None:
         # tx_cache = self.rs.get(tx_hash)
         tx_cache = self.rs.get(tx_hash)
@@ -184,6 +168,7 @@ class Task:
             self.rs.set(tx_hash, json.dumps(data), 120)
             return data
 
+    # 获取远程交易Tx
     def _get_remote_tx(self, tx_hash):
         try:
             tx = self.w3.eth.get_transaction(tx_hash)
@@ -192,6 +177,7 @@ class Task:
             lg.error(f"_get_remote_tx:{e}")
             return None
 
+    # 获取远程最新pair的索引
     def _get_remote_pair_index(self) -> int:
         try:
             index = getattr(self.factory_instance.functions, 'allPairsLength')().call()
@@ -216,6 +202,7 @@ class Task:
     def _get_base(self):
         return self.db[BASE].find_one({'_id': 1})
 
+    # 更新同步状态机
     def _update_base(self, field: str, new_data: Any):
         self.db[BASE].update_one({'_id': 1}, {'$set': {field: new_data}})
 
@@ -239,6 +226,7 @@ class Task:
             lg.error(f"net error _fetch_logs:{e}")
             return None
 
+    # 扫描区块i
     def _to_scan_block(self, i: int) -> bool:
         lg.info(f'scan block: {i}')
         block = self._fetch_block(i)
@@ -310,6 +298,7 @@ class Task:
         except Exception as e:
             lg.error(f"_to_sync_signpair:{e}")
 
+    # 保存pair信息
     def _to_save_pair(self, pindex: int, pair_addr: str, t0_addr: str, t0_symbol: str, t0_decimal: int,
                       t0_total_supply: int, t1_addr: str, t1_symbol: str, t1_decimal: int, t1_total_supply: int):
         lg.info(f"save pair:{pair_addr.lower()}")
@@ -334,18 +323,21 @@ class Task:
         }
         self._insert_docm(UNIV2_PAIRS, new_pair_data)
 
+    # 数据库方法，找到并修改
     def _find_and_set(self, coll: str, query: dict, new_data: dict, upsert: bool):
         try:
             self.db[coll].find_one_and_update(filter=query, update={'$set': new_data}, upsert=upsert)
         except Exception as e:
             lg.error(f"_find_and_set:{new_data} {e}")
 
+    # 数据库方法 新增文档
     def _insert_docm(self, coll: str, data):
         try:
             self.db[coll].insert_one(data)
         except Exception as e:
             lg.error(f"_insert_docm:{coll} {e}")
 
+    # 查询erc20 token信息
     def _fetch_erc20(self, addr: str) -> dict | None:
         ltoken = self._get_local_erc20(addr)
         if ltoken:
@@ -371,6 +363,7 @@ class Task:
         }
         self._insert_docm(TOKENS, data)
 
+    # 获取远程erc20 信息
     def _get_remote_erc20(self, addr: str) -> dict | None:
         try:
             erc20_instance = self._gen_erc20_instance(addr)
@@ -387,6 +380,7 @@ class Task:
             lg.error(f"_get_remote_erc20:{e}")
             return None
 
+    # 获取本地erc20 token信息
     def _get_local_erc20(self, addr: str) -> dict | None:
         token = self.db[TOKENS].find_one(filter={'_id': addr.lower()})
         return {
@@ -431,6 +425,7 @@ class Task:
             'topic0': [a.hex() for a in topics]
         }
 
+    # 保留，但不使用
     def _save_event(self, event: dict):
         try:
             self.db[UNIV2_EVENT].insert_one(event)
@@ -467,6 +462,7 @@ class Task:
             case _:
                 pass
 
+    # 处理Pool创建事件
     def _handle_factory_event_paircreated(self, ts: int, tx: dict, log, event_name) -> object:
 
         event = self._parse_com(log)
@@ -536,6 +532,7 @@ class Task:
         self._find_and_set(UNIV2_PAIRS, {'_id': pair.lower()}, new_pair_data, upsert=True)
         self._set_local_pair_index(pindex)
 
+    # 处理Swap 事件
     def _handle_pair_event_swap(self, ts, tx, log, pair_obj, event_name):
         # ndex_topic_1 address sender, uint256 amount0In, uint256 amount1In, uint256 amount0Out, uint256 amount1Out, index_topic_2 address to
         event = self._parse_com(log)
@@ -607,7 +604,7 @@ class Task:
         # 更新pair最新价格
         self._find_and_set(UNIV2_PAIRS, {'_id': pair.lower()}, {'price': price, 'update_time': ts}, upsert=False)
 
-    # 处理k线数据
+    # 处理k线数据，保留
     def _parse_kline(self, new_swap: dict):
 
         start_time = 300 * int(new_swap['ts'] / 300)  # 计算k线bar起始点时间戳

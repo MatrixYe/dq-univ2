@@ -41,7 +41,7 @@ docker run -itd --name dq-univ2-ethereum --network dq dq-univ2 \
 - redis redis数据库地址，如果采用docker内网，那么使用网络别名代替IP
 
 
-### 脚本运行，本地测试
+脚本运行，仅供本地测试
 ```shell
 python main.py \
   --chain ethereum \
@@ -63,6 +63,7 @@ python main.py \
 - univ2_pairs 交易池信息
 - univ2_swaps 掉期信息
 
+### Pair数据
 ```text
 {
   "_id": "0xb4e16d0168e52d35cacd2c6185b44281ec28c9dc",//赤字id
