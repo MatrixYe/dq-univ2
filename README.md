@@ -40,6 +40,13 @@ docker run -itd --name dq-univ2-ethereum --network dq dq-univ2 \
 - mongo mongodb数据库地址，如果采用docker内网，那么使用网络别名代替IP
 - redis redis数据库地址，如果采用docker内网，那么使用网络别名代替IP
 
+查看日志
+```shell
+docker logs -f --tail 100 dq-univ2-ethereum
+```
+```shell
+docker logs -f --tail 100 dq-univ2-coinbase
+```
 
 脚本运行，仅供本地测试
 ```shell
