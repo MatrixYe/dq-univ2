@@ -598,7 +598,7 @@ class Task:
             'tx_hash': tx_hash,
             'nonce': nonce
         }
-        price = round(a0 / a1, 8)
+        price = round(amount_0 / amount_1, 8) if amount_1 != 0 else None
         # 插入最新的swap记录
         self._insert_docm(UNIV2_SWAP, new_swap)
         # 更新pair最新价格
