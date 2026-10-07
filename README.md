@@ -20,7 +20,7 @@ docker build -t dq-univ2 .
 ```shell
 docker run -itd --name dq-univ2-ethereum --network dq dq-univ2 \
   --chain ethereum \
-  --endpoint_url "https://responsive-weathered-wave.quiknode.pro/bddde541192e648f9cfb99a1ad86d8846058d334/" \
+  --endpoint_url "you url" \
   --factory "0x5c69bee701ef814a2b6a3edd4b1652cb9cc5aa6f" \
   --full_pair true \
   --skip_history false \
